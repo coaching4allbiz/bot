@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Coaching4all - Final Stable Version (معدلة)
+Coaching4all - Final Reviewed Version (معدلة ومُراجعة)
 """
 
 import os
@@ -55,13 +55,69 @@ def is_rate_limited(telegram_id: int) -> bool:
     user_times.append(now)
     return False
 
-# ==================== دوال قاعدة البيانات (معدلة ومحسنة) ====================
+# ==================== دوال قاعدة البيانات ====================
 def get_db_connection():
     if DB_TYPE == "postgres":
-        conn = psycopg2.connect(DATABASE_URL)
-        return conn
+        return psycopg2.connect(DATABASE_URL)
     else:
         return sqlite3.connect("coaching4all.db")
+
+def init_db():
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    if DB_TYPE == "postgres":
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                telegram_id BIGINT PRIMARY KEY,
+                first_name TEXT, username TEXT, tier TEXT DEFAULT 'free',
+                goals TEXT, preferred_name TEXT, date_of_birth TEXT, gender TEXT,
+                city TEXT, occupation TEXT, marital_status TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_active TIMESTAMP, current_streak INTEGER DEFAULT 0,
+                last_streak_date DATE
+            )
+        ''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS messages (
+                id SERIAL PRIMARY KEY,
+                telegram_id BIGINT, role TEXT, content TEXT, model_used TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS daily_usage (
+                telegram_id BIGINT, usage_date DATE, message_count INTEGER DEFAULT 0,
+                PRIMARY KEY (telegram_id, usage_date)
+            )
+        ''')
+    else:
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                telegram_id INTEGER PRIMARY KEY,
+                first_name TEXT, username TEXT, tier TEXT DEFAULT 'free',
+                goals TEXT, preferred_name TEXT, date_of_birth TEXT, gender TEXT,
+                city TEXT, occupation TEXT, marital_status TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_active TIMESTAMP, current_streak INTEGER DEFAULT 0,
+                last_streak_date TEXT
+            )
+        ''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER, role TEXT, content TEXT, model_used TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS daily_usage (
+                telegram_id INTEGER, usage_date DATE, message_count INTEGER DEFAULT 0,
+                PRIMARY KEY (telegram_id, usage_date)
+            )
+        ''')
+    conn.commit()
+    conn.close()
 
 def get_or_create_user(telegram_id: int, first_name: str = "", username: str = "") -> Dict[str, Any]:
     conn = get_db_connection()
