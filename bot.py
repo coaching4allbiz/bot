@@ -410,6 +410,34 @@ def get_coach_response(user_message: str, user_context: dict, model: str) -> str
         logger.error(f"DeepSeek Error: {e}")
         return "عذرًا، حدث خطأ فني مؤقت."
 
+def get_coach_response_with_dynamic_prompt(user_message: str, user_context: dict, model: str, dynamic_prompt: str) -> str:
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": dynamic_prompt}
+    ]
+    
+    context_parts = []
+    if user_context.get("preferred_name"):
+        context_parts.append(f"الاسم المفضل: {user_context['preferred_name']}")
+    if user_context.get("goals"):
+        context_parts.append(f"الهدف: {user_context['goals']}")
+    if user_context.get("current_streak"):
+        context_parts.append(f"السلسلة: {user_context['current_streak']} يوم")
+
+    if context_parts:
+        messages.append({"role": "system", "content": " | ".join(context_parts)})
+
+    messages.append({"role": "user", "content": user_message})
+
+    try:
+        response = deepseek_client.chat.completions.create(
+            model=model, messages=messages, temperature=0.7, max_tokens=1500
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error(f"DeepSeek Error: {e}")
+        return "عذرًا، حدث خطأ فني مؤقت."
+
 # ==================== معالجات البوت ====================
 
 @bot.message_handler(commands=['start'])
@@ -501,13 +529,14 @@ def handle_admin_streaks(message):
 @bot.message_handler(func=lambda m: True)
 def handle_all_messages(message):
     user_id = message.from_user.id
+    text = message.text.strip()
 
     if is_rate_limited(user_id):
         bot.reply_to(message, "ترسل رسائل بسرعة كبيرة. انتظر قليلاً.")
         return
 
     user = get_or_create_user(user_id, message.from_user.first_name, message.from_user.username)
-    text = message.text.strip()
+    step = user.get("current_onboarding_step", "start")
 
     if is_non_coaching_query(text):
         bot.reply_to(message, f"للاستفسارات المتعلقة بالاشتراكات والدعم: {BUSINESS_ACCOUNT}")
@@ -517,20 +546,39 @@ def handle_all_messages(message):
         bot.reply_to(message, "وصلت للحد اليومي.")
         return
 
-    model = "deepseek-v4-pro" if user["tier"] == "paid" else "deepseek-v4-flash"
+    # ==================== منطق المراحل ====================
+    
+    if step == "awaiting_coaching_experience":
+        update_user_step(user_id, "collecting_basic_info")
+        bot.send_chat_action(message.chat.id, 'typing')
 
-    bot.send_chat_action(message.chat.id, 'typing')
+        dynamic_prompt = """أنت الآن في مرحلة التعرف على العميل (المحادثة الثانية).
 
-    try:
-        reply = get_coach_response(text, user, model)
+قواعد مهمة يجب اتباعها:
+- تحدث بأسلوب ودي وطبيعي، كأنك تتحدث مع صديق.
+- اسأل سؤالاً واحداً أو اثنين كحد أقصى في كل رد. لا تُثقل العميل بأسئلة كثيرة.
+- ابدأ بجمع معلومات أساسية بلطف: مجال عمله أو نشاطه اليومي، ثم مدينته، ثم تاريخ ميلاده (يمكنه كتابة السنة فقط).
+- استخدم عبارات مثل: "لو ما تمانع"، "هل تمانع"، "هل يناسبك".
+- ربط المعلومات بالقيمة: أخبره بلطف أن هذه المعلومات تساعدك تفهمه بشكل أفضل.
+- لا تطلب أي معلومات حساسة (مثل مشاكل صحية دقيقة، بيانات مالية، أو تفاصيل شخصية جداً).
+- بعد جمع بعض المعلومات، يمكنك أن تسأله بلطف إن كان لديه أي تحديات أو أمور تشغل باله حالياً."""
+
+        reply = get_coach_response_with_dynamic_prompt(text, user, "deepseek-v4-flash", dynamic_prompt)
         bot.reply_to(message, reply)
         log_message(user_id, "user", text)
-        log_message(user_id, "assistant", reply, model)
+        log_message(user_id, "assistant", reply, "deepseek-v4-flash")
         increment_daily_count(user_id)
-        update_streak(user_id)
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        bot.reply_to(message, "عذرًا، حدث خطأ فني.")
+        return
+
+    # ==================== الوضع الديناميكي (بعد الـ Onboarding) ====================
+    bot.send_chat_action(message.chat.id, 'typing')
+    model = "deepseek-v4-pro" if user["tier"] == "paid" else "deepseek-v4-flash"
+    reply = get_coach_response(text, user, model)
+    bot.reply_to(message, reply)
+    log_message(user_id, "user", text)
+    log_message(user_id, "assistant", reply, model)
+    increment_daily_count(user_id)
+    update_streak(user_id)
 
 if __name__ == "__main__":
     print("🚀 Coaching4all Bot starting...")
