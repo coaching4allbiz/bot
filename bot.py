@@ -546,8 +546,6 @@ def handle_all_messages(message):
         bot.reply_to(message, "وصلت للحد اليومي.")
         return
 
-    # ==================== منطق المراحل ====================
-    
     if step == "awaiting_coaching_experience":
         update_user_step(user_id, "collecting_basic_info")
         bot.send_chat_action(message.chat.id, 'typing')
@@ -570,7 +568,6 @@ def handle_all_messages(message):
         increment_daily_count(user_id)
         return
 
-    # ==================== الوضع الديناميكي (بعد الـ Onboarding) ====================
     bot.send_chat_action(message.chat.id, 'typing')
     model = "deepseek-v4-pro" if user["tier"] == "paid" else "deepseek-v4-flash"
     reply = get_coach_response(text, user, model)
@@ -583,6 +580,8 @@ def handle_all_messages(message):
 if __name__ == "__main__":
     print("🚀 Coaching4all Bot starting...")
     init_db()
-    print(f"✅ Database: {DB_TYPE}")
-    print("✅ Admin commands enabled")
+    
+    # هذا السطر مهم لحل مشكلة الـ 409
+    bot.delete_webhook()
+    
     bot.infinity_polling(skip_pending=True)
