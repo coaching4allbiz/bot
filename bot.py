@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """
-Coaching4all - Final Reviewed Version (معدلة ومُراجعة)
+Coaching4all - Final Reviewed Version
 """
-
 import os
 import logging
 import time
 from datetime import datetime, date, timedelta
 from collections import defaultdict
 from typing import Dict, Any, List, Optional
-
 import telebot
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -31,7 +29,6 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 ADMIN_TELEGRAM_ID = int(os.getenv("ADMIN_TELEGRAM_ID", "0"))
 BUSINESS_ACCOUNT = "@coaching4allbiz"
 DATABASE_URL = os.getenv("DATABASE_URL")
-
 FREE_DAILY_LIMIT = int(os.getenv("FREE_DAILY_LIMIT", "35"))
 PAID_DAILY_LIMIT = int(os.getenv("PAID_DAILY_LIMIT", "130"))
 
@@ -56,6 +53,7 @@ def is_rate_limited(telegram_id: int) -> bool:
     return False
 
 # ==================== دوال قاعدة البيانات ====================
+
 def get_db_connection():
     if DB_TYPE == "postgres":
         return psycopg2.connect(DATABASE_URL)
@@ -75,7 +73,13 @@ def init_db():
                 city TEXT, occupation TEXT, marital_status TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_active TIMESTAMP, current_streak INTEGER DEFAULT 0,
-                last_streak_date DATE
+                last_streak_date DATE,
+                onboarding_completed BOOLEAN DEFAULT FALSE,
+                current_onboarding_step TEXT DEFAULT 'start',
+                big_five_result TEXT,
+                hexaco_result TEXT,
+                disc_result TEXT,
+                openjung_result TEXT
             )
         ''')
         c.execute('''
@@ -100,7 +104,13 @@ def init_db():
                 city TEXT, occupation TEXT, marital_status TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_active TIMESTAMP, current_streak INTEGER DEFAULT 0,
-                last_streak_date TEXT
+                last_streak_date TEXT,
+                onboarding_completed INTEGER DEFAULT 0,
+                current_onboarding_step TEXT DEFAULT 'start',
+                big_five_result TEXT,
+                hexaco_result TEXT,
+                disc_result TEXT,
+                openjung_result TEXT
             )
         ''')
         c.execute('''
@@ -116,6 +126,7 @@ def init_db():
                 PRIMARY KEY (telegram_id, usage_date)
             )
         ''')
+
     conn.commit()
     conn.close()
 
@@ -138,22 +149,31 @@ def get_or_create_user(telegram_id: int, first_name: str = "", username: str = "
         else:
             keys = ["telegram_id", "first_name", "username", "tier", "goals", "preferred_name",
                     "date_of_birth", "gender", "city", "occupation", "marital_status",
-                    "created_at", "last_active", "current_streak", "last_streak_date"]
+                    "created_at", "last_active", "current_streak", "last_streak_date",
+                    "onboarding_completed", "current_onboarding_step",
+                    "big_five_result", "hexaco_result", "disc_result", "openjung_result"]
             return dict(zip(keys, user))
     else:
         if DB_TYPE == "postgres":
             c.execute('''
-                INSERT INTO users (telegram_id, first_name, username, tier)
-                VALUES (%s, %s, %s, 'free')
+                INSERT INTO users (telegram_id, first_name, username, tier, onboarding_completed, current_onboarding_step)
+                VALUES (%s, %s, %s, 'free', FALSE, 'start')
             ''', (telegram_id, first_name, username))
         else:
             c.execute('''
-                INSERT INTO users (telegram_id, first_name, username, tier)
-                VALUES (?, ?, ?, 'free')
+                INSERT INTO users (telegram_id, first_name, username, tier, onboarding_completed, current_onboarding_step)
+                VALUES (?, ?, ?, 'free', 0, 'start')
             ''', (telegram_id, first_name, username))
         conn.commit()
         conn.close()
-        return {"telegram_id": telegram_id, "first_name": first_name, "username": username, "tier": "free"}
+        return {
+            "telegram_id": telegram_id,
+            "first_name": first_name,
+            "username": username,
+            "tier": "free",
+            "onboarding_completed": False,
+            "current_onboarding_step": "start"
+        }
 
 def update_user_profile(telegram_id: int, field: str, value: str):
     conn = get_db_connection()
@@ -167,6 +187,37 @@ def update_user_profile(telegram_id: int, field: str, value: str):
         conn.commit()
     conn.close()
 
+def update_user_step(telegram_id: int, step: str):
+    conn = get_db_connection()
+    c = conn.cursor()
+    if DB_TYPE == "postgres":
+        c.execute("UPDATE users SET current_onboarding_step = %s WHERE telegram_id = %s", (step, telegram_id))
+    else:
+        c.execute("UPDATE users SET current_onboarding_step = ? WHERE telegram_id = ?", (step, telegram_id))
+    conn.commit()
+    conn.close()
+
+def update_onboarding_completed(telegram_id: int, completed: bool = True):
+    conn = get_db_connection()
+    c = conn.cursor()
+    if DB_TYPE == "postgres":
+        c.execute("UPDATE users SET onboarding_completed = %s WHERE telegram_id = %s", (completed, telegram_id))
+    else:
+        c.execute("UPDATE users SET onboarding_completed = ? WHERE telegram_id = ?", (int(completed), telegram_id))
+    conn.commit()
+    conn.close()
+
+def update_personality_result(telegram_id: int, test_name: str, result: str):
+    conn = get_db_connection()
+    c = conn.cursor()
+    column = f"{test_name}_result"
+    if DB_TYPE == "postgres":
+        c.execute(f"UPDATE users SET {column} = %s WHERE telegram_id = %s", (result, telegram_id))
+    else:
+        c.execute(f"UPDATE users SET {column} = ? WHERE telegram_id = ?", (result, telegram_id))
+    conn.commit()
+    conn.close()
+
 def delete_user_data(telegram_id: int):
     conn = get_db_connection()
     c = conn.cursor()
@@ -177,7 +228,7 @@ def delete_user_data(telegram_id: int):
     else:
         c.execute("DELETE FROM users WHERE telegram_id = ?", (telegram_id,))
         c.execute("DELETE FROM messages WHERE telegram_id = ?", (telegram_id,))
-        c.execute("DELETE FROM daily_usage WHERE telegram_id = ?", (telegram_id,))
+        c.execute("DELETE FROM daily_usage WHERE telegram_id = ?", (telegram_id))
     conn.commit()
     conn.close()
 
@@ -213,14 +264,14 @@ def increment_daily_count(telegram_id: int):
         c.execute('''
             INSERT INTO daily_usage (telegram_id, usage_date, message_count)
             VALUES (%s, %s, 1)
-            ON CONFLICT (telegram_id, usage_date) 
+            ON CONFLICT (telegram_id, usage_date)
             DO UPDATE SET message_count = daily_usage.message_count + 1
         ''', (telegram_id, today))
     else:
         c.execute('''
             INSERT INTO daily_usage (telegram_id, usage_date, message_count)
             VALUES (?, ?, 1)
-            ON CONFLICT(telegram_id, usage_date) 
+            ON CONFLICT(telegram_id, usage_date)
             DO UPDATE SET message_count = message_count + 1
         ''', (telegram_id, today))
     conn.commit()
@@ -235,15 +286,15 @@ def update_streak(telegram_id: int):
     today = date.today()
     today_str = today.isoformat()
     yesterday_str = (today - timedelta(days=1)).isoformat()
-    
+
     conn = get_db_connection()
     c = conn.cursor()
-    
+
     if DB_TYPE == "postgres":
         c.execute("SELECT last_streak_date, current_streak FROM users WHERE telegram_id = %s", (telegram_id,))
     else:
         c.execute("SELECT last_streak_date, current_streak FROM users WHERE telegram_id = ?", (telegram_id,))
-    
+
     row = c.fetchone()
     if row:
         last_date = str(row[0]) if row[0] else None
@@ -254,7 +305,7 @@ def update_streak(telegram_id: int):
             streak += 1
         else:
             streak = 1
-        
+
         if DB_TYPE == "postgres":
             c.execute("UPDATE users SET current_streak = %s, last_streak_date = %s WHERE telegram_id = %s",
                       (streak, today, telegram_id))
@@ -265,10 +316,11 @@ def update_streak(telegram_id: int):
     conn.close()
 
 # ==================== دوال مساعدة للأدمن ====================
+
 def get_user_stats() -> Dict[str, Any]:
     conn = get_db_connection()
     c = conn.cursor()
-    
+
     if DB_TYPE == "postgres":
         c.execute("SELECT COUNT(*) FROM users")
         total_users = c.fetchone()[0]
@@ -283,7 +335,7 @@ def get_user_stats() -> Dict[str, Any]:
         active_today = c.fetchone()[0]
         c.execute("SELECT AVG(current_streak) FROM users")
         avg_streak = c.fetchone()[0] or 0
-    
+
     conn.close()
     return {
         "total_users": total_users,
@@ -315,18 +367,22 @@ def get_user_details(telegram_id: int) -> Optional[Dict]:
         user = c.fetchone()
         if user:
             keys = ["telegram_id", "first_name", "username", "tier", "goals", "preferred_name",
-                    "date_of_birth", "gender", "city", "occupation", "marital_status", "current_streak"]
+                    "date_of_birth", "gender", "city", "occupation", "marital_status",
+                    "current_streak", "onboarding_completed", "current_onboarding_step",
+                    "big_five_result", "hexaco_result", "disc_result", "openjung_result"]
             return dict(zip(keys, user))
     conn.close()
     return None
 
 # ==================== كشف الأسئلة غير الكوتشينغ ====================
+
 def is_non_coaching_query(text: str) -> bool:
     text_lower = text.lower()
     keywords = ['اشتراك', 'دفع', 'خدمة العملاء', 'دعم', 'ترقية', 'فاتورة', 'استرجاع', 'payment', 'subscription']
     return any(kw in text_lower for kw in keywords)
 
 # ==================== البرومبت ====================
+
 SYSTEM_PROMPT = """أنت كوتش AI محترف في Coaching4all. تتبع معايير ICF.
 - لا تعطِ نصائح مباشرة. استخدم أسئلة قوية.
 - شجع على بناء الثقة من خلال السلسلة اليومية.
@@ -344,6 +400,7 @@ def get_coach_response(user_message: str, user_context: dict, model: str) -> str
     if context_parts:
         messages.append({"role": "system", "content": " | ".join(context_parts)})
     messages.append({"role": "user", "content": user_message})
+
     try:
         response = deepseek_client.chat.completions.create(
             model=model, messages=messages, temperature=0.7, max_tokens=1500
@@ -354,12 +411,23 @@ def get_coach_response(user_message: str, user_context: dict, model: str) -> str
         return "عذرًا، حدث خطأ فني مؤقت."
 
 # ==================== معالجات البوت ====================
+
 @bot.message_handler(commands=['start'])
 def handle_start(message):
     user = get_or_create_user(message.from_user.id, message.from_user.first_name, message.from_user.username)
     streak = user.get("current_streak", 0)
     preferred = user.get("preferred_name") or user.get("first_name", "صديقي")
-    text = f"مرحبًا {preferred} 👋\n\nأنا كوتش AI في Coaching4all.\n🔥 سلسلتك: {streak} يوم\n\nيمكنك حذف بياناتك بـ /delete_my_data"
+
+    text = f"""مرحبًا {preferred} 👋
+
+أنا **راشد AI**، كوتشك الشخصي.
+
+دوري أن أساعدك تفهم نفسك أكثر وتوصل لخيارات أوضح في حياتك.
+
+🔥 سلسلتك الحالية: {streak} يوم
+
+يمكنك حذف بياناتك في أي وقت باستخدام الأمر: /delete_my_data"""
+
     bot.reply_to(message, text)
     update_streak(message.from_user.id)
 
@@ -373,6 +441,7 @@ def handle_privacy(message):
     bot.reply_to(message, f"سياسة الخصوصية. للاستفسارات: {BUSINESS_ACCOUNT}")
 
 # ==================== أوامر الأدمن ====================
+
 @bot.message_handler(commands=['admin_stats'])
 def handle_admin_stats(message):
     if message.from_user.id != ADMIN_TELEGRAM_ID:
@@ -380,7 +449,6 @@ def handle_admin_stats(message):
     stats = get_user_stats()
     text = f"""
 📊 <b>إحصائيات Coaching4all</b>
-
 • إجمالي المستخدمين: {stats['total_users']}
 • نشطون اليوم: {stats['active_today']}
 • متوسط السلسلة: {stats['average_streak']} يوم
@@ -401,7 +469,6 @@ def handle_admin_user(message):
         if user:
             text = f"""
 👤 <b>بيانات المستخدم</b>
-
 • الاسم: {user.get('first_name')}
 • المستوى: {user.get('tier')}
 • الهدف: {user.get('goals', 'غير محدد')}
@@ -430,6 +497,7 @@ def handle_admin_streaks(message):
     bot.reply_to(message, "هذه الميزة قيد التطوير.")
 
 # ==================== المعالج الرئيسي ====================
+
 @bot.message_handler(func=lambda m: True)
 def handle_all_messages(message):
     user_id = message.from_user.id
@@ -445,18 +513,12 @@ def handle_all_messages(message):
         bot.reply_to(message, f"للاستفسارات المتعلقة بالاشتراكات والدعم: {BUSINESS_ACCOUNT}")
         return
 
-    if user.get("goals") is None and not text.startswith('/'):
-        update_user_profile(user_id, 'goals', text)
-        bot.reply_to(message, "✅ تم حفظ هدفك. هل تريد إضافة معلومات أخرى؟ (اختياري)")
-        increment_daily_count(user_id)
-        update_streak(user_id)
-        return
-
     if not check_daily_limit(user_id, user["tier"]):
         bot.reply_to(message, "وصلت للحد اليومي.")
         return
 
     model = "deepseek-v4-pro" if user["tier"] == "paid" else "deepseek-v4-flash"
+
     bot.send_chat_action(message.chat.id, 'typing')
 
     try:
