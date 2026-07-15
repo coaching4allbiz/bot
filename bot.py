@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Coaching4all - Final Reviewed Version
+Coaching4all - Final Reviewed Version (محدثة ومقاومة لخطأ 409)
 """
 import os
 import logging
@@ -228,7 +228,7 @@ def delete_user_data(telegram_id: int):
     else:
         c.execute("DELETE FROM users WHERE telegram_id = ?", (telegram_id,))
         c.execute("DELETE FROM messages WHERE telegram_id = ?", (telegram_id,))
-        c.execute("DELETE FROM daily_usage WHERE telegram_id = ?", (telegram_id))
+        c.execute("DELETE FROM daily_usage WHERE telegram_id = ?", (telegram_id,))
     conn.commit()
     conn.close()
 
@@ -577,11 +577,42 @@ def handle_all_messages(message):
     increment_daily_count(user_id)
     update_streak(user_id)
 
+# ==================== التشغيل المحسن (مقاوم لخطأ 409) ====================
+
 if __name__ == "__main__":
     print("🚀 Coaching4all Bot starting...")
     init_db()
-    
-    # هذا السطر مهم لحل مشكلة الـ 409
-    bot.delete_webhook()
-    
-    bot.infinity_polling(skip_pending=True)
+    print(f"✅ Database: {DB_TYPE}")
+
+    # حذف أي webhook سابق + تنظيف
+    try:
+        bot.delete_webhook(drop_pending_updates=True)
+        print("✅ Webhook deleted successfully")
+        time.sleep(3)  # انتظار مهم جداً
+    except Exception as e:
+        print(f"⚠️ Warning while deleting webhook: {e}")
+
+    # حلقة إعادة محاولة عند حدوث 409
+    while True:
+        try:
+            print("🔄 Starting infinity polling...")
+            bot.infinity_polling(
+                skip_pending=True,
+                timeout=20,
+                long_polling_timeout=20,
+                restart_on_change=False
+            )
+        except Exception as e:
+            error_msg = str(e)
+            print(f"❌ Polling error: {error_msg}")
+
+            if "409" in error_msg or "Conflict" in error_msg:
+                print("⚠️ 409 Conflict detected. Waiting 15 seconds then retrying...")
+                try:
+                    bot.delete_webhook(drop_pending_updates=True)
+                except:
+                    pass
+                time.sleep(15)
+            else:
+                print("Waiting 5 seconds before retry...")
+                time.sleep(5)
