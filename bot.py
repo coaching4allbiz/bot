@@ -468,6 +468,50 @@ def is_non_coaching_query(text: str) -> bool:
                 'استرجاع', 'payment', 'subscription', 'upgrade', 'billing']
     return any(kw in text_lower for kw in keywords)
 
+def is_coaching_benefits_query(text: str) -> bool:
+    """يكشف إذا كان السؤال عن فوائد أو مزايا الكوتشينغ"""
+    text_lower = text.lower().strip()
+    keywords = [
+        'فائدة الكوتشينغ', 'فوائد الكوتشينغ', 'مزايا الكوتشينغ', 'ميزة الكوتشينغ',
+        'فائدة الكوتشنج', 'فوائد الكوتشنج', 'مزايا الكوتشنج',
+        'ليش الكوتشينغ', 'لماذا الكوتشينغ', 'وش فايدة الكوتشينغ', 'وش فائدة الكوتشينغ',
+        'ما هي فوائد', 'ماهي فوائد', 'ما هي مزايا', 'ماهي مزايا',
+        'فائدة الكوتشينج', 'فوائد الكوتشينج', 'مزايا الكوتشينج',
+        'benefit of coaching', 'benefits of coaching', 'why coaching',
+        'advantage of coaching', 'advantages of coaching',
+        'ليش أحتاج كوتش', 'لماذا أحتاج كوتش', 'وش يفيدني الكوتشينغ',
+        'فائدة الكوتش', 'فوائد الكوتش', 'مزايا الكوتش'
+    ]
+    return any(kw in text_lower for kw in keywords)
+
+COACHING_BENEFITS_RESPONSE = """الكوتشينغ ليس مجرد نصائح، بل عملية منظمة تساعدك تكتشف إجاباتك بنفسك وتتحرك نحو أهدافك بوضوح وثقة.
+
+<b>أهم فوائده:</b>
+
+1. <b>وضوح أكبر</b>
+   يساعدك ترى وضعك الحالي والنتائج التي تريدها بوضوح أكبر، بدل التشتت.
+
+2. <b>اتخاذ قرارات أفضل</b>
+   من خلال أسئلة قوية، تكتشف الخيارات المتاحة وتختار ما يناسبك أنت، لا ما يفرضه الآخرون.
+
+3. <b>مسؤولية ذاتية</b>
+   ينقلك من انتظار الحلول إلى أخذ زمام المبادرة وبناء خطط عملية قابلة للتنفيذ.
+
+4. <b>استدامة التغيير</b>
+   يركز على بناء عادات ووعي دائم، وليس حلول مؤقتة.
+
+5. <b>دعم غير متحيز</b>
+   الكوتش لا يحكم عليك ولا يفرض رأيه، بل يرافقك بحيادية واهتمام حقيقي بنجاحك.
+
+6. <b>تسريع النمو</b>
+   يوفر عليك وقتاً وجهداً كبيرين مقارنة بالمحاولة العشوائية وحدك.
+
+في Coaching4all (راشد AI) نلتزم بمعايير الاتحاد الدولي للكوتشينغ (ICF)، ونركز على تمكينك أنت لتصل لإجاباتك وحلولك الخاصة.
+
+هل تريد أن نبدأ الآن في موضوع معين يشغلك؟"""
+
+# ==================== البرومبت ====================
+
 SYSTEM_PROMPT = """أنت راشد AI، كوتش محترف في Coaching4all. تتبع معايير الاتحاد الدولي للكوتشينغ (ICF) بدقة.
 
 قواعد أساسية:
@@ -850,14 +894,26 @@ def handle_all_messages(message):
 
     user = get_or_create_user(user_id, message.from_user.first_name, message.from_user.username)
 
+    # التحقق من الحد اليومي
     if not check_daily_limit(user_id, user.get("tier", "free")):
         bot.reply_to(message, f"وصلت للحد اليومي ({FREE_DAILY_LIMIT if user.get('tier') == 'free' else PAID_DAILY_LIMIT} رسالة).\nيمكنك الترقية عبر {BUSINESS_ACCOUNT}")
         return
 
+    # أسئلة الاشتراك والدعم
     if is_non_coaching_query(text):
         bot.reply_to(message, f"للاستفسارات المتعلقة بالاشتراكات والدعم الفني: {BUSINESS_ACCOUNT}")
         return
 
+    # أسئلة عن فوائد / مزايا الكوتشينغ → إجابة مباشرة
+    if is_coaching_benefits_query(text):
+        bot.reply_to(message, COACHING_BENEFITS_RESPONSE)
+        log_message(user_id, "user", text)
+        log_message(user_id, "assistant", COACHING_BENEFITS_RESPONSE, "direct")
+        increment_daily_count(user_id)
+        update_streak(user_id)
+        return
+
+    # إذا لم يكتمل الـ Onboarding → نوجهه للمنطق الخاص
     completed = user.get("onboarding_completed")
     is_completed = bool(completed) if completed is not None else False
 
@@ -865,6 +921,7 @@ def handle_all_messages(message):
         handle_onboarding(message, user)
         return
 
+    # الوضع العادي (كوتشينغ حر)
     bot.send_chat_action(message.chat.id, 'typing')
     model = "deepseek-v4-pro" if user.get("tier") == "paid" else "deepseek-v4-flash"
     recent = get_recent_messages(user_id, limit=8)
