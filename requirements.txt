@@ -1,6 +1,6 @@
-pyTelegramBotAPI
-openai
-python-dotenv
-psycopg2-binary
-flask
-gunicorn
+pyTelegramBotAPI>=4.35.0
+openai>=1.40.0
+python-dotenv>=1.0.0
+psycopg2-binary>=2.9.9
+flask>=3.0.0
+gunicorn>=22.0.0

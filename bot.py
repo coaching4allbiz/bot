@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-Coaching4all - Full Webhook Version
+Coaching4all - راشد AI
+Final Complete Stable Version (Webhook + Full Onboarding + Personality)
 """
+
 import os
 import logging
 import time
@@ -61,7 +63,9 @@ def get_db_connection():
     if DB_TYPE == "postgres":
         return psycopg2.connect(DATABASE_URL)
     else:
-        return sqlite3.connect("coaching4all.db")
+        conn = sqlite3.connect("coaching4all.db")
+        conn.row_factory = sqlite3.Row  # مهم جداً لإصلاح مشكلة الترتيب
+        return conn
 
 def init_db():
     conn = get_db_connection()
@@ -71,11 +75,19 @@ def init_db():
         c.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 telegram_id BIGINT PRIMARY KEY,
-                first_name TEXT, username TEXT, tier TEXT DEFAULT 'free',
-                goals TEXT, preferred_name TEXT, date_of_birth TEXT, gender TEXT,
-                city TEXT, occupation TEXT, marital_status TEXT,
+                first_name TEXT,
+                username TEXT,
+                tier TEXT DEFAULT 'free',
+                goals TEXT,
+                preferred_name TEXT,
+                date_of_birth TEXT,
+                gender TEXT,
+                city TEXT,
+                occupation TEXT,
+                marital_status TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_active TIMESTAMP, current_streak INTEGER DEFAULT 0,
+                last_active TIMESTAMP,
+                current_streak INTEGER DEFAULT 0,
                 last_streak_date DATE,
                 onboarding_completed BOOLEAN DEFAULT FALSE,
                 current_onboarding_step TEXT DEFAULT 'start',
@@ -88,13 +100,18 @@ def init_db():
         c.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id SERIAL PRIMARY KEY,
-                telegram_id BIGINT, role TEXT, content TEXT, model_used TEXT,
+                telegram_id BIGINT,
+                role TEXT,
+                content TEXT,
+                model_used TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         c.execute('''
             CREATE TABLE IF NOT EXISTS daily_usage (
-                telegram_id BIGINT, usage_date DATE, message_count INTEGER DEFAULT 0,
+                telegram_id BIGINT,
+                usage_date DATE,
+                message_count INTEGER DEFAULT 0,
                 PRIMARY KEY (telegram_id, usage_date)
             )
         ''')
@@ -102,11 +119,19 @@ def init_db():
         c.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 telegram_id INTEGER PRIMARY KEY,
-                first_name TEXT, username TEXT, tier TEXT DEFAULT 'free',
-                goals TEXT, preferred_name TEXT, date_of_birth TEXT, gender TEXT,
-                city TEXT, occupation TEXT, marital_status TEXT,
+                first_name TEXT,
+                username TEXT,
+                tier TEXT DEFAULT 'free',
+                goals TEXT,
+                preferred_name TEXT,
+                date_of_birth TEXT,
+                gender TEXT,
+                city TEXT,
+                occupation TEXT,
+                marital_status TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_active TIMESTAMP, current_streak INTEGER DEFAULT 0,
+                last_active TIMESTAMP,
+                current_streak INTEGER DEFAULT 0,
                 last_streak_date TEXT,
                 onboarding_completed INTEGER DEFAULT 0,
                 current_onboarding_step TEXT DEFAULT 'start',
@@ -119,13 +144,18 @@ def init_db():
         c.execute('''
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER, role TEXT, content TEXT, model_used TEXT,
+                telegram_id INTEGER,
+                role TEXT,
+                content TEXT,
+                model_used TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         c.execute('''
             CREATE TABLE IF NOT EXISTS daily_usage (
-                telegram_id INTEGER, usage_date DATE, message_count INTEGER DEFAULT 0,
+                telegram_id INTEGER,
+                usage_date DATE,
+                message_count INTEGER DEFAULT 0,
                 PRIMARY KEY (telegram_id, usage_date)
             )
         ''')
@@ -146,27 +176,27 @@ def get_or_create_user(telegram_id: int, first_name: str = "", username: str = "
         user = c.fetchone()
 
     if user:
-        conn.close()
+        # تحديث last_active
         if DB_TYPE == "postgres":
-            return dict(user)
+            c.execute("UPDATE users SET last_active = %s WHERE telegram_id = %s",
+                      (datetime.utcnow(), telegram_id))
         else:
-            keys = ["telegram_id", "first_name", "username", "tier", "goals", "preferred_name",
-                    "date_of_birth", "gender", "city", "occupation", "marital_status",
-                    "created_at", "last_active", "current_streak", "last_streak_date",
-                    "onboarding_completed", "current_onboarding_step",
-                    "big_five_result", "hexaco_result", "disc_result", "openjung_result"]
-            return dict(zip(keys, user))
+            c.execute("UPDATE users SET last_active = ? WHERE telegram_id = ?",
+                      (datetime.utcnow().isoformat(), telegram_id))
+        conn.commit()
+        conn.close()
+        return dict(user)
     else:
         if DB_TYPE == "postgres":
             c.execute('''
-                INSERT INTO users (telegram_id, first_name, username, tier, onboarding_completed, current_onboarding_step)
-                VALUES (%s, %s, %s, 'free', FALSE, 'start')
-            ''', (telegram_id, first_name, username))
+                INSERT INTO users (telegram_id, first_name, username, tier, onboarding_completed, current_onboarding_step, last_active)
+                VALUES (%s, %s, %s, 'free', FALSE, 'start', %s)
+            ''', (telegram_id, first_name, username, datetime.utcnow()))
         else:
             c.execute('''
-                INSERT INTO users (telegram_id, first_name, username, tier, onboarding_completed, current_onboarding_step)
-                VALUES (?, ?, ?, 'free', 0, 'start')
-            ''', (telegram_id, first_name, username))
+                INSERT INTO users (telegram_id, first_name, username, tier, onboarding_completed, current_onboarding_step, last_active)
+                VALUES (?, ?, ?, 'free', 0, 'start', ?)
+            ''', (telegram_id, first_name, username, datetime.utcnow().isoformat()))
         conn.commit()
         conn.close()
         return {
@@ -174,20 +204,24 @@ def get_or_create_user(telegram_id: int, first_name: str = "", username: str = "
             "first_name": first_name,
             "username": username,
             "tier": "free",
-            "onboarding_completed": False,
-            "current_onboarding_step": "start"
+            "onboarding_completed": False if DB_TYPE == "postgres" else 0,
+            "current_onboarding_step": "start",
+            "current_streak": 0
         }
 
 def update_user_profile(telegram_id: int, field: str, value: str):
+    allowed = ['goals', 'preferred_name', 'date_of_birth', 'gender', 'city',
+               'occupation', 'marital_status', 'big_five_result', 'hexaco_result',
+               'disc_result', 'openjung_result']
+    if field not in allowed:
+        return
     conn = get_db_connection()
     c = conn.cursor()
-    allowed = ['goals', 'preferred_name', 'date_of_birth', 'gender', 'city', 'occupation', 'marital_status']
-    if field in allowed:
-        if DB_TYPE == "postgres":
-            c.execute(f"UPDATE users SET {field} = %s WHERE telegram_id = %s", (value, telegram_id))
-        else:
-            c.execute(f"UPDATE users SET {field} = ? WHERE telegram_id = ?", (value, telegram_id))
-        conn.commit()
+    if DB_TYPE == "postgres":
+        c.execute(f"UPDATE users SET {field} = %s WHERE telegram_id = %s", (value, telegram_id))
+    else:
+        c.execute(f"UPDATE users SET {field} = ? WHERE telegram_id = ?", (value, telegram_id))
+    conn.commit()
     conn.close()
 
 def update_user_step(telegram_id: int, step: str):
@@ -204,20 +238,11 @@ def update_onboarding_completed(telegram_id: int, completed: bool = True):
     conn = get_db_connection()
     c = conn.cursor()
     if DB_TYPE == "postgres":
-        c.execute("UPDATE users SET onboarding_completed = %s WHERE telegram_id = %s", (completed, telegram_id))
+        c.execute("UPDATE users SET onboarding_completed = %s, current_onboarding_step = 'completed' WHERE telegram_id = %s",
+                  (completed, telegram_id))
     else:
-        c.execute("UPDATE users SET onboarding_completed = ? WHERE telegram_id = ?", (int(completed), telegram_id))
-    conn.commit()
-    conn.close()
-
-def update_personality_result(telegram_id: int, test_name: str, result: str):
-    conn = get_db_connection()
-    c = conn.cursor()
-    column = f"{test_name}_result"
-    if DB_TYPE == "postgres":
-        c.execute(f"UPDATE users SET {column} = %s WHERE telegram_id = %s", (result, telegram_id))
-    else:
-        c.execute(f"UPDATE users SET {column} = ? WHERE telegram_id = ?", (result, telegram_id))
+        c.execute("UPDATE users SET onboarding_completed = ?, current_onboarding_step = 'completed' WHERE telegram_id = ?",
+                  (int(completed), telegram_id))
     conn.commit()
     conn.close()
 
@@ -247,17 +272,52 @@ def log_message(telegram_id: int, role: str, content: str, model_used: str = Non
     conn.commit()
     conn.close()
 
+def get_recent_messages(telegram_id: int, limit: int = 8) -> List[Dict[str, str]]:
+    """جلب آخر رسائل المستخدم لاستخدامها كسياق"""
+    conn = get_db_connection()
+    c = conn.cursor()
+    if DB_TYPE == "postgres":
+        c.execute('''
+            SELECT role, content FROM messages
+            WHERE telegram_id = %s
+            ORDER BY timestamp DESC
+            LIMIT %s
+        ''', (telegram_id, limit))
+        rows = c.fetchall()
+    else:
+        c.execute('''
+            SELECT role, content FROM messages
+            WHERE telegram_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        ''', (telegram_id, limit))
+        rows = c.fetchall()
+    conn.close()
+
+    # نعكس الترتيب ليكون من الأقدم للأحدث
+    messages = []
+    for row in reversed(rows):
+        if DB_TYPE == "postgres":
+            messages.append({"role": row[0], "content": row[1]})
+        else:
+            messages.append({"role": row["role"], "content": row["content"]})
+    return messages
+
 def get_daily_message_count(telegram_id: int) -> int:
     today = date.today().isoformat()
     conn = get_db_connection()
     c = conn.cursor()
     if DB_TYPE == "postgres":
-        c.execute('SELECT message_count FROM daily_usage WHERE telegram_id = %s AND usage_date = %s', (telegram_id, today))
+        c.execute('SELECT message_count FROM daily_usage WHERE telegram_id = %s AND usage_date = %s',
+                  (telegram_id, today))
     else:
-        c.execute('SELECT message_count FROM daily_usage WHERE telegram_id = ? AND usage_date = ?', (telegram_id, today))
+        c.execute('SELECT message_count FROM daily_usage WHERE telegram_id = ? AND usage_date = ?',
+                  (telegram_id, today))
     result = c.fetchone()
     conn.close()
-    return result[0] if result else 0
+    if result:
+        return result[0] if DB_TYPE == "postgres" else result["message_count"]
+    return 0
 
 def increment_daily_count(telegram_id: int):
     today = date.today().isoformat()
@@ -343,145 +403,407 @@ def get_user_stats() -> Dict[str, Any]:
     return {
         "total_users": total_users,
         "active_today": active_today,
-        "average_streak": round(avg_streak, 1)
+        "average_streak": round(float(avg_streak), 1)
     }
 
 def get_recent_users(limit: int = 10) -> List[Dict]:
     conn = get_db_connection()
     c = conn.cursor()
     if DB_TYPE == "postgres":
+        c = conn.cursor(cursor_factory=RealDictCursor)
         c.execute("SELECT telegram_id, first_name, tier, current_streak FROM users ORDER BY created_at DESC LIMIT %s", (limit,))
+        users = c.fetchall()
+        result = [dict(u) for u in users]
     else:
         c.execute("SELECT telegram_id, first_name, tier, current_streak FROM users ORDER BY created_at DESC LIMIT ?", (limit,))
-    users = c.fetchall()
+        users = c.fetchall()
+        result = [{"telegram_id": u["telegram_id"], "first_name": u["first_name"],
+                   "tier": u["tier"], "current_streak": u["current_streak"]} for u in users]
     conn.close()
-    return [dict(u) if DB_TYPE == "postgres" else {"telegram_id": u[0], "first_name": u[1], "tier": u[2], "current_streak": u[3]} for u in users]
+    return result
 
 def get_user_details(telegram_id: int) -> Optional[Dict]:
     conn = get_db_connection()
     c = conn.cursor()
     if DB_TYPE == "postgres":
+        c = conn.cursor(cursor_factory=RealDictCursor)
         c.execute("SELECT * FROM users WHERE telegram_id = %s", (telegram_id,))
         user = c.fetchone()
-        if user:
-            return dict(user)
+        result = dict(user) if user else None
     else:
         c.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,))
         user = c.fetchone()
-        if user:
-            keys = ["telegram_id", "first_name", "username", "tier", "goals", "preferred_name",
-                    "date_of_birth", "gender", "city", "occupation", "marital_status",
-                    "current_streak", "onboarding_completed", "current_onboarding_step",
-                    "big_five_result", "hexaco_result", "disc_result", "openjung_result"]
-            return dict(zip(keys, user))
+        result = dict(user) if user else None
     conn.close()
-    return None
+    return result
 
 # ==================== كشف الأسئلة غير الكوتشينغ ====================
 
 def is_non_coaching_query(text: str) -> bool:
     text_lower = text.lower()
-    keywords = ['اشتراك', 'دفع', 'خدمة العملاء', 'دعم', 'ترقية', 'فاتورة', 'استرجاع', 'payment', 'subscription']
+    keywords = ['اشتراك', 'دفع', 'خدمة العملاء', 'دعم', 'ترقية', 'فاتورة',
+                'استرجاع', 'payment', 'subscription', 'upgrade', 'billing']
     return any(kw in text_lower for kw in keywords)
 
 # ==================== البرومبت ====================
 
-SYSTEM_PROMPT = """أنت كوتش AI محترف في Coaching4all. تتبع معايير ICF.
-- لا تعطِ نصائح مباشرة. استخدم أسئلة قوية.
-- شجع على بناء الثقة من خلال السلسلة اليومية.
-- ذكّر المستخدم بحقه في حذف بياناته باستخدام /delete_my_data."""
+SYSTEM_PROMPT = """أنت راشد AI، كوتش محترف في Coaching4all. تتبع معايير الاتحاد الدولي للكوتشينغ (ICF) بدقة.
 
-def get_coach_response(user_message: str, user_context: dict, model: str) -> str:
+قواعد أساسية:
+- لا تعطِ نصائح مباشرة أبداً. استخدم أسئلة قوية وعميقة تساعد العميل يكتشف إجابات نفسه.
+- كن ودوداً ومهذباً ومحترماً.
+- شجع على الاستمرارية وبناء السلسلة اليومية (Streak).
+- ذكّر المستخدم بحقه في حذف بياناته باستخدام /delete_my_data عند الحاجة.
+- تحدث باللغة العربية الفصحى المبسطة والواضحة.
+- ركز على التمكين والوعي الذاتي وليس على الحلول الجاهزة."""
+
+def build_user_context(user: dict) -> str:
+    parts = []
+    if user.get("preferred_name"):
+        parts.append(f"الاسم المفضل: {user['preferred_name']}")
+    if user.get("goals"):
+        parts.append(f"الهدف الرئيسي: {user['goals']}")
+    if user.get("city"):
+        parts.append(f"المدينة: {user['city']}")
+    if user.get("occupation"):
+        parts.append(f"المهنة/النشاط: {user['occupation']}")
+    if user.get("current_streak"):
+        parts.append(f"السلسلة الحالية: {user['current_streak']} يوم")
+    if user.get("big_five_result"):
+        parts.append(f"نتيجة Big Five: {user['big_five_result']}")
+    if user.get("disc_result"):
+        parts.append(f"نتيجة DISC: {user['disc_result']}")
+    if user.get("hexaco_result"):
+        parts.append(f"نتيجة HEXACO: {user['hexaco_result']}")
+    if user.get("openjung_result"):
+        parts.append(f"نتيجة OpenJung: {user['openjung_result']}")
+    return " | ".join(parts) if parts else ""
+
+def get_coach_response(user_message: str, user_context: dict, model: str,
+                       recent_messages: List[Dict] = None, extra_system: str = None) -> str:
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    context_parts = []
-    if user_context.get("preferred_name"):
-        context_parts.append(f"الاسم المفضل: {user_context['preferred_name']}")
-    if user_context.get("goals"):
-        context_parts.append(f"الهدف: {user_context['goals']}")
-    if user_context.get("current_streak"):
-        context_parts.append(f"السلسلة: {user_context['current_streak']} يوم")
-    if context_parts:
-        messages.append({"role": "system", "content": " | ".join(context_parts)})
-    messages.append({"role": "user", "content": user_message})
 
-    try:
-        response = deepseek_client.chat.completions.create(
-            model=model, messages=messages, temperature=0.7, max_tokens=1500
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"DeepSeek Error: {e}")
-        return "عذرًا، حدث خطأ فني مؤقت."
+    if extra_system:
+        messages.append({"role": "system", "content": extra_system})
 
-def get_coach_response_with_dynamic_prompt(user_message: str, user_context: dict, model: str, dynamic_prompt: str) -> str:
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "system", "content": dynamic_prompt}
-    ]
-    
-    context_parts = []
-    if user_context.get("preferred_name"):
-        context_parts.append(f"الاسم المفضل: {user_context['preferred_name']}")
-    if user_context.get("goals"):
-        context_parts.append(f"الهدف: {user_context['goals']}")
-    if user_context.get("current_streak"):
-        context_parts.append(f"السلسلة: {user_context['current_streak']} يوم")
+    context_str = build_user_context(user_context)
+    if context_str:
+        messages.append({"role": "system", "content": f"معلومات عن العميل: {context_str}"})
 
-    if context_parts:
-        messages.append({"role": "system", "content": " | ".join(context_parts)})
+    # إضافة آخر الرسائل كسياق
+    if recent_messages:
+        for msg in recent_messages:
+            role = "assistant" if msg["role"] == "assistant" else "user"
+            messages.append({"role": role, "content": msg["content"]})
 
     messages.append({"role": "user", "content": user_message})
 
     try:
         response = deepseek_client.chat.completions.create(
-            model=model, messages=messages, temperature=0.7, max_tokens=1500
+            model=model,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1800
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
         logger.error(f"DeepSeek Error: {e}")
-        return "عذرًا، حدث خطأ فني مؤقت."
+        return "عذرًا، حدث خطأ فني مؤقت. حاول مرة أخرى بعد قليل."
+
+# ==================== منطق الـ Onboarding ====================
+
+ONBOARDING_STEPS = [
+    "start",
+    "preferred_name",
+    "goals",
+    "city",
+    "occupation",
+    "gender",
+    "date_of_birth",
+    "marital_status",
+    "personality_intro",
+    "personality_assessment",
+    "completed"
+]
+
+def handle_onboarding(message, user: dict):
+    """معالجة كاملة لرحلة التعرف"""
+    user_id = message.from_user.id
+    text = message.text.strip()
+    step = user.get("current_onboarding_step", "start")
+
+    # تخطي إذا كتب "تخطي" أو "skip"
+    skip = text.lower() in ["تخطي", "skip", "تخطي الآن", "لاحقاً", "لاحقا"]
+
+    if step == "start" or step == "preferred_name":
+        if step == "start":
+            # الرسالة الأولى بعد /start تكون الاسم المفضل
+            update_user_step(user_id, "preferred_name")
+            bot.reply_to(message,
+                "مرحباً بك في رحلة التعرف 🌟\n\n"
+                "ما الاسم الذي تحب أن أناديك به؟\n"
+                "(يمكنك كتابة اسمك الأول أو أي لقب تفضله)")
+            return
+
+        # حفظ الاسم المفضل
+        if not skip and len(text) > 1:
+            update_user_profile(user_id, "preferred_name", text)
+            preferred = text
+        else:
+            preferred = user.get("first_name") or "صديقي"
+            update_user_profile(user_id, "preferred_name", preferred)
+
+        update_user_step(user_id, "goals")
+        bot.reply_to(message,
+            f"تشرفت يا {preferred} 😊\n\n"
+            "ما الهدف أو المجال الذي تريد العمل عليه معي في الفترة القادمة؟\n"
+            "(مثال: تطوير الذات، العلاقات، المهنة، التوازن، الثقة بالنفس...)")
+        return
+
+    if step == "goals":
+        if not skip and len(text) > 2:
+            update_user_profile(user_id, "goals", text)
+        update_user_step(user_id, "city")
+        bot.reply_to(message,
+            "ممتاز.\n\n"
+            "من أي مدينة أنت؟ (هذا يساعدني أفهم السياق الثقافي والاجتماعي)")
+        return
+
+    if step == "city":
+        if not skip and len(text) > 1:
+            update_user_profile(user_id, "city", text)
+        update_user_step(user_id, "occupation")
+        bot.reply_to(message,
+            "شكراً.\n\n"
+            "ما طبيعة عملك أو نشاطك اليومي الحالي؟")
+        return
+
+    if step == "occupation":
+        if not skip and len(text) > 1:
+            update_user_profile(user_id, "occupation", text)
+        update_user_step(user_id, "gender")
+        bot.reply_to(message,
+            "تمام.\n\n"
+            "لو ما تمانع، ما هو جنسك؟ (ذكر / أنثى)\n"
+            "يمكنك كتابة «تخطي» إذا فضلت عدم الإجابة.")
+        return
+
+    if step == "gender":
+        if not skip:
+            gender_map = {"ذكر": "ذكر", "أنثى": "أنثى", "male": "ذكر", "female": "أنثى", "م": "ذكر", "ا": "أنثى"}
+            g = gender_map.get(text.lower().strip(), text)
+            update_user_profile(user_id, "gender", g)
+        update_user_step(user_id, "date_of_birth")
+        bot.reply_to(message,
+            "حسناً.\n\n"
+            "في أي سنة ولدت تقريباً؟ (مثال: 1995)\n"
+            "يمكنك كتابة «تخطي».")
+        return
+
+    if step == "date_of_birth":
+        if not skip and text.isdigit() and 1940 < int(text) < 2015:
+            update_user_profile(user_id, "date_of_birth", text)
+        update_user_step(user_id, "marital_status")
+        bot.reply_to(message,
+            "شكراً.\n\n"
+            "الحالة الاجتماعية؟ (أعزب / متزوج / أخرى)\n"
+            "يمكنك كتابة «تخطي».")
+        return
+
+    if step == "marital_status":
+        if not skip:
+            update_user_profile(user_id, "marital_status", text)
+        update_user_step(user_id, "personality_intro")
+        bot.reply_to(message,
+            "رائع، شكراً على صبرك 🙏\n\n"
+            "الآن سنمر على تقييم شخصية قصير وممتع.\n"
+            "سأطرح عليك مجموعة أسئلة بسيطة، وأحلل إجاباتك لأفهم أسلوبك بشكل أفضل.\n\n"
+            "هل أنت مستعد؟ اكتب «نعم» أو «جاهز» للبدء.")
+        return
+
+    if step == "personality_intro":
+        if text.lower() in ["نعم", "جاهز", "يلا", "ابدأ", "start", "yes", "ok"]:
+            update_user_step(user_id, "personality_assessment")
+            # نبدأ التقييم مباشرة
+            dynamic = """أنت الآن تقوم بتقييم شخصية قصير للعميل.
+اطرح 6-8 أسئلة متنوعة تغطي أبعاد:
+- الانفتاح (Openness)
+- الضمير الحي (Conscientiousness)
+- الانبساط (Extraversion)
+- القبول (Agreeableness)
+- العصابية (Neuroticism)
+- وأيضاً لمحات من DISC و HEXACO.
+
+اطرح سؤالاً واحداً فقط في كل مرة.
+اجعل الأسئلة عملية ومفتوحة قليلاً وليست اختيار من متعدد جاف.
+بعد أن يجيب العميل على كل الأسئلة، لخص النتائج باختصار شديد في صيغة جاهزة للتخزين."""
+            reply = get_coach_response(
+                "ابدأ التقييم الآن واطرح السؤال الأول فقط.",
+                user, "deepseek-v4-flash",
+                extra_system=dynamic
+            )
+            bot.reply_to(message, reply)
+            log_message(user_id, "assistant", reply, "deepseek-v4-flash")
+        else:
+            bot.reply_to(message, "عندما تكون مستعداً اكتب «نعم» أو «جاهز».")
+        return
+
+    if step == "personality_assessment":
+        # نستخدم الـ AI لإدارة التقييم
+        dynamic = """أنت في منتصف تقييم شخصية قصير.
+- إذا لم تكتمل الأسئلة بعد، اطرح السؤال التالي فقط.
+- إذا اكتملت الأسئلة (حوالي 6-8)، قم بتلخيص النتائج بهذا الشكل بالضبط:
+
+=== نتائج التقييم ===
+Big Five: [ملخص قصير جداً]
+DISC: [حرف أو وصف قصير]
+HEXACO: [ملخص قصير]
+OpenJung: [وصف قصير للنمط]
+
+ثم قل للعميل أن التقييم انتهى ويمكنه الآن البدء في الكوتشينغ الحر.
+لا تطرح أسئلة إضافية بعد التلخيص."""
+        recent = get_recent_messages(user_id, limit=12)
+        reply = get_coach_response(text, user, "deepseek-v4-flash", recent_messages=recent, extra_system=dynamic)
+        bot.reply_to(message, reply)
+        log_message(user_id, "user", text)
+        log_message(user_id, "assistant", reply, "deepseek-v4-flash")
+        increment_daily_count(user_id)
+
+        # إذا احتوى الرد على نتائج، نحفظها وننهي الـ onboarding
+        if "=== نتائج التقييم ===" in reply or "Big Five:" in reply:
+            # محاولة استخراج وحفظ النتائج
+            try:
+                if "Big Five:" in reply:
+                    part = reply.split("Big Five:")[1].split("\n")[0].strip()
+                    update_user_profile(user_id, "big_five_result", part[:300])
+                if "DISC:" in reply:
+                    part = reply.split("DISC:")[1].split("\n")[0].strip()
+                    update_user_profile(user_id, "disc_result", part[:200])
+                if "HEXACO:" in reply:
+                    part = reply.split("HEXACO:")[1].split("\n")[0].strip()
+                    update_user_profile(user_id, "hexaco_result", part[:200])
+                if "OpenJung:" in reply:
+                    part = reply.split("OpenJung:")[1].split("\n")[0].strip()
+                    update_user_profile(user_id, "openjung_result", part[:200])
+            except Exception as e:
+                logger.warning(f"Could not parse personality results: {e}")
+
+            update_onboarding_completed(user_id, True)
+            bot.send_message(message.chat.id,
+                "✅ تم حفظ نتائج تقييم الشخصية بنجاح.\n\n"
+                "الآن أنت جاهز للكوتشينغ الحر مع راشد AI.\n"
+                "اطرح أي موضوع تريد العمل عليه، وسأكون معك خطوة بخطوة.\n\n"
+                "يمكنك دائماً استخدام:\n"
+                "/profile - لعرض ملفك\n"
+                "/streak - لمعرفة سلسلتك\n"
+                "/delete_my_data - لحذف بياناتك")
+        return
+
+    # إذا وصلنا هنا لسبب ما
+    bot.reply_to(message, "شكراً. لنكمل.")
 
 # ==================== معالجات البوت ====================
 
 @bot.message_handler(commands=['start'])
 def handle_start(message):
     user = get_or_create_user(message.from_user.id, message.from_user.first_name, message.from_user.username)
+    preferred = user.get("preferred_name") or user.get("first_name") or "صديقي"
     streak = user.get("current_streak", 0)
-    preferred = user.get("preferred_name") or user.get("first_name", "صديقي")
+    completed = user.get("onboarding_completed")
 
-    text = f"""مرحبًا {preferred} 👋
+    # تحويل القيمة حسب نوع القاعدة
+    is_completed = bool(completed) if completed is not None else False
 
-أنا **راشد AI**، كوتشك الشخصي.
+    if is_completed:
+        text = f"""مرحباً بعودتك يا {preferred} 👋
 
-دوري أن أساعدك تفهم نفسك أكثر وتوصل لخيارات أوضح في حياتك.
+أنا <b>راشد AI</b>، كوتشك الشخصي.
+
+🔥 سلسلتك الحالية: <b>{streak} يوم</b>
+
+كيف يمكنني مساعدتك اليوم؟
+يمكنك استخدام /help لرؤية الأوامر المتاحة."""
+        bot.reply_to(message, text)
+        update_streak(message.from_user.id)
+    else:
+        # بدء الـ Onboarding
+        text = f"""مرحباً {preferred} 👋
+
+أنا <b>راشد AI</b>، كوتشك الشخصي من Coaching4all.
+
+دوري أن أساعدك تفهم نفسك أكثر وتصل لخيارات أوضح في حياتك، باستخدام أسئلة قوية وأسلوب كوتشينغ احترافي (معايير ICF).
 
 🔥 سلسلتك الحالية: {streak} يوم
 
-يمكنك حذف بياناتك في أي وقت باستخدام الأمر: /delete_my_data"""
+قبل أن نبدأ، أحتاج بضع دقائق للتعرف عليك بشكل أفضل.
+هذا يساعدني أقدم لك تجربة أكثر دقة وشخصية.
 
+هل أنت مستعد؟ اكتب أي شيء أو «ابدأ» للمتابعة.
+(يمكنك حذف بياناتك في أي وقت بـ /delete_my_data)"""
+        bot.reply_to(message, text)
+        update_user_step(message.from_user.id, "preferred_name")
+        update_streak(message.from_user.id)
+
+@bot.message_handler(commands=['help'])
+def handle_help(message):
+    text = """📋 <b>أوامر راشد AI</b>
+
+/start - بدء أو العودة
+/profile - عرض ملفك الشخصي
+/streak - معرفة سلسلتك اليومية
+/privacy - سياسة الخصوصية
+/delete_my_data - حذف جميع بياناتك نهائياً
+
+<b>للأدمن فقط:</b>
+/admin_stats
+/admin_user [id]
+/admin_recent"""
     bot.reply_to(message, text)
-    update_streak(message.from_user.id)
+
+@bot.message_handler(commands=['profile'])
+def handle_profile(message):
+    user = get_or_create_user(message.from_user.id, message.from_user.first_name, message.from_user.username)
+    preferred = user.get("preferred_name") or user.get("first_name") or "—"
+    text = f"""👤 <b>ملفك الشخصي</b>
+
+• الاسم المفضل: {preferred}
+• المستوى: {user.get('tier', 'free')}
+• الهدف: {user.get('goals') or 'غير محدد'}
+• المدينة: {user.get('city') or '—'}
+• المهنة: {user.get('occupation') or '—'}
+• السلسلة: {user.get('current_streak', 0)} يوم
+• تقييم الشخصية: {'موجود' if user.get('big_five_result') else 'لم يكتمل بعد'}
+
+يمكنك تحديث بياناتك بالتحدث معي بشكل طبيعي."""
+    bot.reply_to(message, text)
+
+@bot.message_handler(commands=['streak'])
+def handle_streak(message):
+    user = get_or_create_user(message.from_user.id)
+    streak = user.get("current_streak", 0)
+    bot.reply_to(message, f"🔥 سلسلتك الحالية: <b>{streak} يوم</b>\n\nاستمر! كل يوم يبني قوة أكبر.")
 
 @bot.message_handler(commands=['delete_my_data'])
 def handle_delete_data(message):
     delete_user_data(message.from_user.id)
-    bot.reply_to(message, "✅ تم حذف جميع بياناتك بنجاح.")
+    bot.reply_to(message, "✅ تم حذف جميع بياناتك بنجاح.\nيمكنك البدء من جديد في أي وقت بـ /start")
 
 @bot.message_handler(commands=['privacy'])
 def handle_privacy(message):
-    bot.reply_to(message, f"سياسة الخصوصية. للاستفسارات: {BUSINESS_ACCOUNT}")
+    bot.reply_to(message,
+        f"سياسة الخصوصية: نحن نحترم خصوصيتك.\n"
+        f"بياناتك تُستخدم فقط لتحسين تجربة الكوتشينغ.\n"
+        f"للاستفسارات: {BUSINESS_ACCOUNT}")
 
 @bot.message_handler(commands=['admin_stats'])
 def handle_admin_stats(message):
     if message.from_user.id != ADMIN_TELEGRAM_ID:
         return
     stats = get_user_stats()
-    text = f"""
-📊 <b>إحصائيات Coaching4all</b>
+    text = f"""📊 <b>إحصائيات Coaching4all</b>
 • إجمالي المستخدمين: {stats['total_users']}
 • نشطون اليوم: {stats['active_today']}
-• متوسط السلسلة: {stats['average_streak']} يوم
-"""
+• متوسط السلسلة: {stats['average_streak']} يوم"""
     bot.reply_to(message, text)
 
 @bot.message_handler(commands=['admin_user'])
@@ -496,13 +818,14 @@ def handle_admin_user(message):
         target_id = int(parts[1])
         user = get_user_details(target_id)
         if user:
-            text = f"""
-👤 <b>بيانات المستخدم</b>
+            text = f"""👤 <b>بيانات المستخدم</b>
 • الاسم: {user.get('first_name')}
+• المفضل: {user.get('preferred_name')}
 • المستوى: {user.get('tier')}
 • الهدف: {user.get('goals', 'غير محدد')}
 • السلسلة: {user.get('current_streak', 0)} يوم
-"""
+• المدينة: {user.get('city')}
+• onboarding: {user.get('onboarding_completed')}"""
             bot.reply_to(message, text)
         else:
             bot.reply_to(message, "لم يتم العثور على المستخدم.")
@@ -519,57 +842,43 @@ def handle_admin_recent(message):
         text += f"• {u.get('first_name')} | {u.get('tier')} | سلسلة: {u.get('current_streak', 0)}\n"
     bot.reply_to(message, text)
 
-@bot.message_handler(commands=['admin_streaks'])
-def handle_admin_streaks(message):
-    if message.from_user.id != ADMIN_TELEGRAM_ID:
-        return
-    bot.reply_to(message, "هذه الميزة قيد التطوير.")
-
 @bot.message_handler(func=lambda m: True)
 def handle_all_messages(message):
     user_id = message.from_user.id
-    text = message.text.strip()
+    text = (message.text or "").strip()
+    if not text:
+        return
 
     if is_rate_limited(user_id):
-        bot.reply_to(message, "ترسل رسائل بسرعة كبيرة. انتظر قليلاً.")
+        bot.reply_to(message, "ترسل رسائل بسرعة كبيرة. انتظر قليلاً من فضلك.")
         return
 
     user = get_or_create_user(user_id, message.from_user.first_name, message.from_user.username)
-    step = user.get("current_onboarding_step", "start")
 
+    # التحقق من الحد اليومي
+    if not check_daily_limit(user_id, user.get("tier", "free")):
+        bot.reply_to(message, f"وصلت للحد اليومي ({FREE_DAILY_LIMIT if user.get('tier') == 'free' else PAID_DAILY_LIMIT} رسالة).\nيمكنك الترقية عبر {BUSINESS_ACCOUNT}")
+        return
+
+    # أسئلة الاشتراك والدعم
     if is_non_coaching_query(text):
-        bot.reply_to(message, f"للاستفسارات المتعلقة بالاشتراكات والدعم: {BUSINESS_ACCOUNT}")
+        bot.reply_to(message, f"للاستفسارات المتعلقة بالاشتراكات والدعم الفني: {BUSINESS_ACCOUNT}")
         return
 
-    if not check_daily_limit(user_id, user["tier"]):
-        bot.reply_to(message, "وصلت للحد اليومي.")
+    # إذا لم يكتمل الـ Onboarding → نوجهه للمنطق الخاص
+    completed = user.get("onboarding_completed")
+    is_completed = bool(completed) if completed is not None else False
+
+    if not is_completed:
+        handle_onboarding(message, user)
         return
 
-    if step == "awaiting_coaching_experience":
-        update_user_step(user_id, "collecting_basic_info")
-        bot.send_chat_action(message.chat.id, 'typing')
-
-        dynamic_prompt = """أنت الآن في مرحلة التعرف على العميل (المحادثة الثانية).
-
-قواعد مهمة يجب اتباعها:
-- تحدث بأسلوب ودي وطبيعي، كأنك تتحدث مع صديق.
-- اسأل سؤالاً واحداً أو اثنين كحد أقصى في كل رد. لا تُثقل العميل بأسئلة كثيرة.
-- ابدأ بجمع معلومات أساسية بلطف: مجال عمله أو نشاطه اليومي، ثم مدينته، ثم تاريخ ميلاده (يمكنه كتابة السنة فقط).
-- استخدم عبارات مثل: "لو ما تمانع"، "هل تمانع"، "هل يناسبك".
-- ربط المعلومات بالقيمة: أخبره بلطف أن هذه المعلومات تساعدك تفهمه بشكل أفضل.
-- لا تطلب أي معلومات حساسة (مثل مشاكل صحية دقيقة، بيانات مالية، أو تفاصيل شخصية جداً).
-- بعد جمع بعض المعلومات، يمكنك أن تسأله بلطف إن كان لديه أي تحديات أو أمور تشغل باله حالياً."""
-
-        reply = get_coach_response_with_dynamic_prompt(text, user, "deepseek-v4-flash", dynamic_prompt)
-        bot.reply_to(message, reply)
-        log_message(user_id, "user", text)
-        log_message(user_id, "assistant", reply, "deepseek-v4-flash")
-        increment_daily_count(user_id)
-        return
-
+    # الوضع العادي (كوتشينغ حر)
     bot.send_chat_action(message.chat.id, 'typing')
-    model = "deepseek-v4-pro" if user["tier"] == "paid" else "deepseek-v4-flash"
-    reply = get_coach_response(text, user, model)
+    model = "deepseek-v4-pro" if user.get("tier") == "paid" else "deepseek-v4-flash"
+    recent = get_recent_messages(user_id, limit=8)
+    reply = get_coach_response(text, user, model, recent_messages=recent)
+
     bot.reply_to(message, reply)
     log_message(user_id, "user", text)
     log_message(user_id, "assistant", reply, model)
@@ -589,22 +898,22 @@ def telegram_webhook():
 
 @app.route('/')
 def index():
-    return "Coaching4all Bot is running with Webhooks!", 200
+    return "Coaching4all Bot (راشد AI) is running with Webhooks!", 200
 
 # ==================== تعيين الـ Webhook ====================
 
 def setup_webhook():
-    if WEBHOOK_URL:
+    if WEBHOOK_URL and TELEGRAM_BOT_TOKEN:
         try:
             bot.remove_webhook()
-            time.sleep(1)
+            time.sleep(0.5)
             full_url = f"{WEBHOOK_URL.rstrip('/')}/{TELEGRAM_BOT_TOKEN}"
             bot.set_webhook(url=full_url)
             print(f"✅ Webhook set successfully to: {full_url}")
         except Exception as e:
             print(f"❌ Error setting webhook: {e}")
     else:
-        print("⚠️ WEBHOOK_URL not set")
+        print("⚠️ WEBHOOK_URL or TELEGRAM_BOT_TOKEN not set")
 
 # يتم استدعاؤها عند تحميل الملف (يعمل مع gunicorn)
 setup_webhook()
