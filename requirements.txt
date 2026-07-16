@@ -2,3 +2,5 @@ pyTelegramBotAPI
 openai
 python-dotenv
 psycopg2-binary
+flask
+gunicorn
