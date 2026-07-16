@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Coaching4all - Final Reviewed Version (محدثة ومقاومة لخطأ 409)
+Coaching4all - Webhook Version (Full Code)
 """
 import os
 import logging
@@ -8,6 +8,7 @@ import time
 from datetime import datetime, date, timedelta
 from collections import defaultdict
 from typing import Dict, Any, List, Optional
+from flask import Flask, request
 import telebot
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -31,9 +32,11 @@ BUSINESS_ACCOUNT = "@coaching4allbiz"
 DATABASE_URL = os.getenv("DATABASE_URL")
 FREE_DAILY_LIMIT = int(os.getenv("FREE_DAILY_LIMIT", "35"))
 PAID_DAILY_LIMIT = int(os.getenv("PAID_DAILY_LIMIT", "130"))
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # سنضيفه في Render
 
 deepseek_client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN, parse_mode="HTML")
+app = Flask(__name__)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -577,42 +580,42 @@ def handle_all_messages(message):
     increment_daily_count(user_id)
     update_streak(user_id)
 
-# ==================== التشغيل المحسن (مقاوم لخطأ 409) ====================
+# ==================== Webhook Routes ====================
+
+@app.route('/' + TELEGRAM_BOT_TOKEN, methods=['POST'])
+def get_message():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return '', 200
+    else:
+        return '', 403
+
+@app.route('/')
+def index():
+    return "Coaching4all Bot is running with Webhooks!", 200
+
+# ==================== التشغيل ====================
 
 if __name__ == "__main__":
-    print("🚀 Coaching4all Bot starting...")
+    print("🚀 Coaching4all Bot starting with Webhooks...")
     init_db()
-    print(f"✅ Database: {DB_TYPE}")
-
-    # حذف أي webhook سابق + تنظيف
+    
+    # حذف أي webhook سابق
     try:
-        bot.delete_webhook(drop_pending_updates=True)
-        print("✅ Webhook deleted successfully")
-        time.sleep(3)  # انتظار مهم جداً
+        bot.remove_webhook()
+        time.sleep(1)
     except Exception as e:
-        print(f"⚠️ Warning while deleting webhook: {e}")
+        print(f"Warning removing webhook: {e}")
 
-    # حلقة إعادة محاولة عند حدوث 409
-    while True:
-        try:
-            print("🔄 Starting infinity polling...")
-            bot.infinity_polling(
-                skip_pending=True,
-                timeout=20,
-                long_polling_timeout=20,
-                restart_on_change=False
-            )
-        except Exception as e:
-            error_msg = str(e)
-            print(f"❌ Polling error: {error_msg}")
+    # تعيين الـ Webhook
+    if WEBHOOK_URL:
+        bot.set_webhook(url=WEBHOOK_URL + '/' + TELEGRAM_BOT_TOKEN)
+        print(f"✅ Webhook set to: {WEBHOOK_URL}")
+    else:
+        print("⚠️ WEBHOOK_URL not set")
 
-            if "409" in error_msg or "Conflict" in error_msg:
-                print("⚠️ 409 Conflict detected. Waiting 15 seconds then retrying...")
-                try:
-                    bot.delete_webhook(drop_pending_updates=True)
-                except:
-                    pass
-                time.sleep(15)
-            else:
-                print("Waiting 5 seconds before retry...")
-                time.sleep(5)
+    # تشغيل Flask (في Render نستخدم gunicorn)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
