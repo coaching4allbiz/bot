@@ -35,7 +35,7 @@ PAID_DAILY_LIMIT = int(os.getenv("PAID_DAILY_LIMIT", "130"))
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 deepseek_client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
-bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN, parse_mode="HTML")
+bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN, parse_mode="HTML", threaded=False)
 app = Flask(__name__)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
