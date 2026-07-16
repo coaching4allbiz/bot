@@ -595,27 +595,37 @@ def get_message():
 @app.route('/')
 def index():
     return "Coaching4all Bot is running with Webhooks!", 200
+# ==================== Webhook Routes ====================
 
-# ==================== التشغيل ====================
-
-if __name__ == "__main__":
-    print("🚀 Coaching4all Bot starting with Webhooks...")
-    init_db()
-    
-    # حذف أي webhook سابق
-    try:
-        bot.remove_webhook()
-        time.sleep(1)
-    except Exception as e:
-        print(f"Warning removing webhook: {e}")
-
-    # تعيين الـ Webhook
-    if WEBHOOK_URL:
-        bot.set_webhook(url=WEBHOOK_URL + '/' + TELEGRAM_BOT_TOKEN)
-        print(f"✅ Webhook set to: {WEBHOOK_URL}")
+@app.route('/' + TELEGRAM_BOT_TOKEN, methods=['POST'])
+def get_message():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return '', 200
     else:
-        print("⚠️ WEBHOOK_URL not set")
+        return '', 403
 
-    # تشغيل Flask (في Render نستخدم gunicorn)
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+@app.route('/')
+def index():
+    return "Coaching4all Bot is running with Webhooks!", 200
+
+# ==================== تعيين الـ Webhook عند التشغيل ====================
+
+def setup_webhook():
+    if WEBHOOK_URL:
+        try:
+            bot.remove_webhook()
+            time.sleep(1)
+            full_webhook_url = f"{WEBHOOK_URL.rstrip('/')}/{TELEGRAM_BOT_TOKEN}"
+            bot.set_webhook(url=full_webhook_url)
+            print(f"✅ Webhook set successfully to: {full_webhook_url}")
+        except Exception as e:
+            print(f"❌ Error setting webhook: {e}")
+    else:
+        print("⚠️ WEBHOOK_URL not set in environment variables")
+
+# استدعاء الدالة عند تحميل الملف (يعمل مع gunicorn)
+setup_webhook()
+init_db()
