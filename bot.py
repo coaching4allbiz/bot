@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Coaching4all - Webhook Version (Full Code)
+Coaching4all - Full Webhook Version
 """
 import os
 import logging
@@ -32,7 +32,7 @@ BUSINESS_ACCOUNT = "@coaching4allbiz"
 DATABASE_URL = os.getenv("DATABASE_URL")
 FREE_DAILY_LIMIT = int(os.getenv("FREE_DAILY_LIMIT", "35"))
 PAID_DAILY_LIMIT = int(os.getenv("PAID_DAILY_LIMIT", "130"))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # سنضيفه في Render
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
 deepseek_client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN, parse_mode="HTML")
@@ -471,8 +471,6 @@ def handle_delete_data(message):
 def handle_privacy(message):
     bot.reply_to(message, f"سياسة الخصوصية. للاستفسارات: {BUSINESS_ACCOUNT}")
 
-# ==================== أوامر الأدمن ====================
-
 @bot.message_handler(commands=['admin_stats'])
 def handle_admin_stats(message):
     if message.from_user.id != ADMIN_TELEGRAM_ID:
@@ -526,8 +524,6 @@ def handle_admin_streaks(message):
     if message.from_user.id != ADMIN_TELEGRAM_ID:
         return
     bot.reply_to(message, "هذه الميزة قيد التطوير.")
-
-# ==================== المعالج الرئيسي ====================
 
 @bot.message_handler(func=lambda m: True)
 def handle_all_messages(message):
@@ -583,49 +579,33 @@ def handle_all_messages(message):
 # ==================== Webhook Routes ====================
 
 @app.route('/' + TELEGRAM_BOT_TOKEN, methods=['POST'])
-def get_message():
+def telegram_webhook():
     if request.headers.get('content-type') == 'application/json':
         json_string = request.get_data().decode('utf-8')
         update = telebot.types.Update.de_json(json_string)
         bot.process_new_updates([update])
         return '', 200
-    else:
-        return '', 403
-
-@app.route('/')
-def index():
-    return "Coaching4all Bot is running with Webhooks!", 200
-# ==================== Webhook Routes ====================
-
-@app.route('/' + TELEGRAM_BOT_TOKEN, methods=['POST'])
-def get_message():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return '', 200
-    else:
-        return '', 403
+    return '', 403
 
 @app.route('/')
 def index():
     return "Coaching4all Bot is running with Webhooks!", 200
 
-# ==================== تعيين الـ Webhook عند التشغيل ====================
+# ==================== تعيين الـ Webhook ====================
 
 def setup_webhook():
     if WEBHOOK_URL:
         try:
             bot.remove_webhook()
             time.sleep(1)
-            full_webhook_url = f"{WEBHOOK_URL.rstrip('/')}/{TELEGRAM_BOT_TOKEN}"
-            bot.set_webhook(url=full_webhook_url)
-            print(f"✅ Webhook set successfully to: {full_webhook_url}")
+            full_url = f"{WEBHOOK_URL.rstrip('/')}/{TELEGRAM_BOT_TOKEN}"
+            bot.set_webhook(url=full_url)
+            print(f"✅ Webhook set successfully to: {full_url}")
         except Exception as e:
             print(f"❌ Error setting webhook: {e}")
     else:
-        print("⚠️ WEBHOOK_URL not set in environment variables")
+        print("⚠️ WEBHOOK_URL not set")
 
-# استدعاء الدالة عند تحميل الملف (يعمل مع gunicorn)
+# يتم استدعاؤها عند تحميل الملف (يعمل مع gunicorn)
 setup_webhook()
 init_db()
